@@ -19,7 +19,7 @@ def load_model():
 
     # ✅ DOWNLOAD MODEL IF NOT EXISTS
     if not os.path.exists(model_path):
-    st.warning("Downloading model... please wait ⏳")
+        st.warning("Downloading model... please wait ⏳")
 
     url = "https://drive.google.com/uc?id=1jSi0P1hc7RJsv3Zj-4fAQZT1JqMil3-6"
     gdown.download(url, model_path, quiet=False)
