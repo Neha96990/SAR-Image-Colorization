@@ -1,0 +1,131 @@
+name: SAR Image Colorization - AWS CodePipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+  CODEPIPELINE_NAME: sar-colorization-pipeline
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest flake8
+
+      - name: Lint with flake8
+        run: |
+          flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        continue-on-error: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build application
+        run: |
+          echo "Building SAR Image Colorization application..."
+          python -m py_compile src/app.py
+          python -m py_compile src/GUI.py
+          python -m py_compile src/image_colarization.py
+
+      - name: Upload artifacts to S3
+        run: |
+          aws s3 cp . s3://${{ secrets.AWS_S3_BUCKET }}/sar-colorization/${{ github.run_number }}/ \
+            --recursive \
+            --exclude ".git/*" \
+            --exclude ".github/*" \
+            --exclude "venv/*" \
+            --exclude "__pycache__/*"
+
+      - name: Trigger AWS CodePipeline
+        run: |
+          PIPELINE_EXECUTION_ID=$(aws codepipeline start-pipeline-execution \
+            --name ${{ env.CODEPIPELINE_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'pipelineExecutionId' \
+            --output text)
+          echo "Started CodePipeline execution: $PIPELINE_EXECUTION_ID"
+          echo "PIPELINE_EXECUTION_ID=$PIPELINE_EXECUTION_ID" >> $GITHUB_ENV
+
+      - name: Wait for pipeline to complete
+        run: |
+          aws codepipeline wait pipeline-execution-complete \
+            --pipeline-name ${{ env.CODEPIPELINE_NAME }} \
+            --pipeline-execution-id ${{ env.PIPELINE_EXECUTION_ID }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Get pipeline status
+        run: |
+          PIPELINE_STATUS=$(aws codepipeline get-pipeline-execution \
+            --pipeline-name ${{ env.CODEPIPELINE_NAME }} \
+            --pipeline-execution-id ${{ env.PIPELINE_EXECUTION_ID }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'pipelineExecution.status' \
+            --output text)
+          echo "Pipeline execution status: $PIPELINE_STATUS"
+          if [ "$PIPELINE_STATUS" != "Succeeded" ]; then
+            exit 1
+          fi
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to AWS
+        run: |
+          echo "Deploying SAR Image Colorization application..."
+          aws s3 cp . s3://${{ secrets.AWS_S3_BUCKET }}/sar-colorization/latest/ \
+            --recursive \
+            --exclude ".git/*" \
+            --exclude ".github/*" \
+            --exclude "venv/*" \
+            --exclude "__pycache__/*"
+
+      - name: Invalidate CloudFront cache
+        if: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
