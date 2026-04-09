@@ -1,38 +1,36 @@
-import streamlit as st
-from PIL import Image
+import os
+import gdown
 import numpy as np
 import cv2 as cv
-import os
-import tempfile
-import urllib.request
-import gdown
-
+import streamlit as st
 
 # ===== Load model and cluster centers once =====
 @st.cache_resource
 def load_model():
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("resources", exist_ok=True)
 
-    pts_path = os.path.join(BASE_DIR, "resources", "pts_in_hull.npy")
-    proto_path = os.path.join(BASE_DIR, "models", "colorization_deploy_v2.prototxt")
-    model_path = os.path.join(BASE_DIR, "models", "colorization_release_v2.caffemodel")
+    model_path = "models/colorization_release_v2.caffemodel"
+    proto_path = "models/colorization_deploy_v2.prototxt"
+    pts_path = "resources/pts_in_hull.npy"
 
-    # ✅ DOWNLOAD MODEL IF NOT EXISTS
+    # ✅ Download model if missing
     if not os.path.exists(model_path):
-        st.warning("Downloading model... please wait ⏳")
+        st.warning("Downloading model... please wait ⏳ (~130MB)")
+        
+        url = "https://drive.google.com/uc?id=1jSi0P1hc7RJsv3Zj-4fAQZT1JqMil3-6"  # replace if needed
+        gdown.download(url, model_path, quiet=False)
 
-    url = "https://drive.google.com/uc?id=1jSi0P1hc7RJsv3Zj-4fAQZT1JqMil3-6"
-    gdown.download(url, model_path, quiet=False)
+    # ✅ Load pts
+    if not os.path.exists(pts_path):
+        st.error("Missing pts_in_hull.npy file")
+        st.stop()
 
-    st.success("Model downloaded successfully ✅")
-
-    # Load cluster centers
     pts_in_hull = np.load(pts_path)
     pts_in_hull = pts_in_hull.transpose().reshape(2, 313, 1, 1)
 
-    # Load model
+    # ✅ Load model
     net = cv.dnn.readNetFromCaffe(proto_path, model_path)
-
     net.getLayer(net.getLayerId('class8_ab')).blobs = [pts_in_hull.astype(np.float32)]
     net.getLayer(net.getLayerId('conv8_313_rh')).blobs = [np.full([1, 313], 2.606, np.float32)]
 
